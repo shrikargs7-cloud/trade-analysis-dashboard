@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self):
-        self.db_path = os.path.join(os.path.dirname(__file__), 'trades.db')
+        if os.environ.get('VERCEL'):
+            self.db_path = '/tmp/trades.db'
+        else:
+            self.db_path = os.environ.get('TRADES_DB_PATH', os.path.join(os.path.dirname(__file__), 'trades.db'))
         self.conn = None
         self.ensure_database_initialized()
 

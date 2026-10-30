@@ -416,7 +416,7 @@
     <div class="cloud-corner"><a href="#" onclick="exportDatabase()" class="cloud-btn"><i class="fas fa-download"></i></a></div>
 
     <script>
-        const API_URL = 'http://localhost:5000';
+        const API_URL = (window.location.origin && window.location.origin !== 'null' && window.location.protocol.startsWith('http')) ? window.location.origin : 'http://localhost:5000';
         let charts = {};
         let queryHistory = JSON.parse(localStorage.getItem('sqlHistory') || '[]');
 
@@ -558,7 +558,19 @@
         document.getElementById('fileInput')?.addEventListener('change', async function(e) {
             if (!e.target.files.length) return;
             const file = e.target.files[0]; const data = await file.arrayBuffer(); const workbook = XLSX.read(data); const sheet = workbook.Sheets[workbook.SheetNames[0]]; const rows = XLSX.utils.sheet_to_json(sheet);
-            let imported = 0; for (const row of rows) { const symbol = row.Symbol || row.symbol; if (!symbol) continue; const query = `INSERT INTO trades (symbol, quantity, entry_price, status) VALUES ('${symbol}', ${row.Quantity || 1}, ${row.Price || 100}, 'OPEN');`; await fetch(`${API_URL}/api/execute-sql`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) }); imported++; }
+            let imported = 0;
+            const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+            for (const row of rows) {
+                const symbol = row.Symbol || row.symbol;
+                if (!symbol) continue;
+                const qty = parseFloat(row.Quantity || row.quantity || 1) || 1;
+                const price = parseFloat(row.Price || row.price || row.entry_price || 100) || 100;
+                const type = (row.Type || row.type || row.trade_type || 'BUY').toUpperCase();
+                const safeSymbol = String(symbol).replace(/'/g, "''");
+                const query = `INSERT INTO trades (symbol, quantity, entry_price, trade_type, entry_date, status) VALUES ('${safeSymbol}', ${qty}, ${price}, '${type}', '${now}', 'OPEN');`;
+                await fetch(`${API_URL}/api/execute-sql`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
+                imported++;
+            }
             document.getElementById('importStatus').innerHTML = `✅ Imported ${imported} records`; setTimeout(() => { document.getElementById('importStatus').innerHTML = ''; }, 3000); loadDashboard(); loadHistory(); e.target.value = '';
         });
 

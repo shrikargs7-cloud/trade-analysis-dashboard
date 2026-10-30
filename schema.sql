@@ -103,3 +103,74 @@ SELECT
     ROUND(MIN(profit_loss), 2) as max_loss
 FROM trades 
 WHERE status = 'CLOSED';
+
+-- ============================================================
+-- VIEWS
+-- ============================================================
+
+DROP VIEW IF EXISTS v_active_trades;
+CREATE VIEW v_active_trades AS
+SELECT 
+    id, trade_id, symbol, entry_price, quantity, trade_type,
+    entry_date, strategy,
+    ROUND(entry_price * quantity, 2) as position_value
+FROM trades
+WHERE status = 'OPEN'
+ORDER BY entry_date DESC;
+
+DROP VIEW IF EXISTS v_closed_trades;
+CREATE VIEW v_closed_trades AS
+SELECT 
+    id, trade_id, symbol, entry_price, exit_price, quantity,
+    trade_type, entry_date, exit_date, profit_loss, profit_loss_percentage,
+    strategy,
+    CASE WHEN profit_loss > 0 THEN 'WIN' ELSE 'LOSS' END as result
+FROM trades
+WHERE status = 'CLOSED'
+ORDER BY exit_date DESC;
+
+DROP VIEW IF EXISTS v_symbol_performance;
+CREATE VIEW v_symbol_performance AS
+SELECT 
+    symbol,
+    COUNT(*) as total_trades,
+    SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+    SUM(CASE WHEN profit_loss < 0 THEN 1 ELSE 0 END) as losses,
+    ROUND(SUM(profit_loss), 2) as total_pnl,
+    ROUND(AVG(profit_loss), 2) as avg_pnl,
+    ROUND(100.0 * SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as win_rate,
+    ROUND(MAX(profit_loss), 2) as best_trade,
+    ROUND(MIN(profit_loss), 2) as worst_trade
+FROM trades
+WHERE status = 'CLOSED'
+GROUP BY symbol
+ORDER BY total_pnl DESC;
+
+DROP VIEW IF EXISTS v_daily_performance;
+CREATE VIEW v_daily_performance AS
+SELECT 
+    date(entry_date) as trade_date,
+    COUNT(*) as trades_count,
+    ROUND(SUM(profit_loss), 2) as daily_pnl,
+    ROUND(SUM(CASE WHEN profit_loss > 0 THEN profit_loss ELSE 0 END), 2) as daily_profit,
+    ROUND(SUM(CASE WHEN profit_loss < 0 THEN profit_loss ELSE 0 END), 2) as daily_loss,
+    ROUND(100.0 * SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as win_rate
+FROM trades
+WHERE status = 'CLOSED'
+GROUP BY date(entry_date)
+ORDER BY trade_date DESC;
+
+DROP VIEW IF EXISTS v_monthly_performance;
+CREATE VIEW v_monthly_performance AS
+SELECT 
+    strftime('%Y-%m', entry_date) as month,
+    COUNT(*) as total_trades,
+    ROUND(SUM(profit_loss), 2) as total_pnl,
+    ROUND(100.0 * SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) as win_rate,
+    ROUND(AVG(profit_loss), 2) as avg_pnl,
+    ROUND(MAX(profit_loss), 2) as best_trade,
+    ROUND(MIN(profit_loss), 2) as worst_trade
+FROM trades
+WHERE status = 'CLOSED'
+GROUP BY strftime('%Y-%m', entry_date)
+ORDER BY month DESC;

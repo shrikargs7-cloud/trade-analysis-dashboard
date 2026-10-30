@@ -5,32 +5,64 @@ import os
 import json
 from datetime import datetime, timedelta
 
-# IMPORTANT: Set template folder to 'templates'
-app = Flask(__name__, 
-            template_folder='templates',  # This tells Flask where HTML files are
-            static_folder='templates/static',  # For CSS/JS files
-            static_url_path='/static')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE_DIR = os.path.join(BASE_DIR, 'templates')
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+
+app = Flask(
+    __name__,
+    template_folder=TEMPLATE_DIR,
+    static_folder=STATIC_DIR,
+    static_url_path='/static'
+)
 
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'trades.db')
+# When running in serverless / read-only environment (like Vercel), use /tmp
+if os.environ.get('VERCEL'):
+    DB_PATH = '/tmp/trades.db'
+else:
+    DB_PATH = os.path.join(BASE_DIR, 'trades.db')
+
+
+def ensure_db():
+    """Ensure database and schema are initialized"""
+    if not os.path.exists(DB_PATH):
+        init_db()
+    else:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
+            if not cursor.fetchone():
+                conn.close()
+                init_db()
+            else:
+                conn.close()
+        except Exception:
+            init_db()
+
 
 def get_db():
     """Get database connection with proper settings"""
+    ensure_db()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
+
 def init_db():
     """Initialize database with all tables, views, and triggers"""
-    conn = get_db()
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
+
     # ============================================================
     # 1. MAIN TABLES
     # ============================================================
-    
+
     # Trades table - main fact table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trades (
@@ -53,7 +85,7 @@ def init_db():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     # Trade events table - for trigger logging
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_events (
@@ -69,7 +101,7 @@ def init_db():
             FOREIGN KEY (trade_id) REFERENCES trades(id)
         )
     ''')
-    
+
     # Trade analytics table - aggregated statistics
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_analytics (
@@ -89,7 +121,7 @@ def init_db():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     # Daily aggregates table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_aggregates (
@@ -106,7 +138,7 @@ def init_db():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     # Strategy performance table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS strategy_performance (
@@ -121,7 +153,7 @@ def init_db():
             UNIQUE(strategy_name, date)
         )
     ''')
-    
+
     # Monitor logs table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS monitor_logs (
@@ -134,7 +166,7 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
     # Import history table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS import_history (
@@ -146,11 +178,11 @@ def init_db():
             error_message TEXT
         )
     ''')
-    
+
     # ============================================================
     # 2. INDEXES for performance
     # ============================================================
-    
+
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_date ON trades(entry_date)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)')
@@ -158,14 +190,11 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_events_trade ON trade_events(trade_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_events_timestamp ON trade_events(event_timestamp)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_aggregates(date)')
-    
+
     # ============================================================
-    # 3. TRIGGERS (Fixed to work with SQLite)
+    # 3. TRIGGERS
     # ============================================================
-    
-    # Note: SQLite triggers have limitations. Simplified versions below.
-    
-    # Trigger: Auto-calculate profit/loss before UPDATE (when closing trade)
+
     cursor.execute('''
         CREATE TRIGGER IF NOT EXISTS trg_calculate_pnl
         BEFORE UPDATE OF exit_price, status ON trades
@@ -184,8 +213,7 @@ def init_db():
             WHERE id = NEW.id;
         END;
     ''')
-    
-    # Trigger: Log INSERT events (simplified)
+
     cursor.execute('''
         CREATE TRIGGER IF NOT EXISTS trg_log_trade_insert
         AFTER INSERT ON trades
@@ -202,22 +230,21 @@ def init_db():
             );
         END;
     ''')
-    
-    # Trigger: Update updated_at timestamp
+
+    # Trigger: Update updated_at timestamp without recursive loop
     cursor.execute('''
         CREATE TRIGGER IF NOT EXISTS trg_update_timestamp
-        AFTER UPDATE ON trades
+        AFTER UPDATE OF symbol, entry_price, exit_price, quantity, trade_type, entry_date, exit_date, status, profit_loss, profit_loss_percentage, strategy, notes, source ON trades
         FOR EACH ROW
         BEGIN
             UPDATE trades SET updated_at = datetime('now') WHERE id = NEW.id;
         END;
     ''')
-    
+
     # ============================================================
     # 4. VIEWS
     # ============================================================
-    
-    # View: Active trades (open positions)
+
     cursor.execute('DROP VIEW IF EXISTS v_active_trades')
     cursor.execute('''
         CREATE VIEW v_active_trades AS
@@ -229,8 +256,7 @@ def init_db():
         WHERE status = 'OPEN'
         ORDER BY entry_date DESC
     ''')
-    
-    # View: Closed trades summary
+
     cursor.execute('DROP VIEW IF EXISTS v_closed_trades')
     cursor.execute('''
         CREATE VIEW v_closed_trades AS
@@ -243,8 +269,7 @@ def init_db():
         WHERE status = 'CLOSED'
         ORDER BY exit_date DESC
     ''')
-    
-    # View: Symbol performance
+
     cursor.execute('DROP VIEW IF EXISTS v_symbol_performance')
     cursor.execute('''
         CREATE VIEW v_symbol_performance AS
@@ -263,8 +288,7 @@ def init_db():
         GROUP BY symbol
         ORDER BY total_pnl DESC
     ''')
-    
-    # View: Daily performance
+
     cursor.execute('DROP VIEW IF EXISTS v_daily_performance')
     cursor.execute('''
         CREATE VIEW v_daily_performance AS
@@ -280,8 +304,7 @@ def init_db():
         GROUP BY date(entry_date)
         ORDER BY trade_date DESC
     ''')
-    
-    # View: Monthly summary
+
     cursor.execute('DROP VIEW IF EXISTS v_monthly_performance')
     cursor.execute('''
         CREATE VIEW v_monthly_performance AS
@@ -298,39 +321,37 @@ def init_db():
         GROUP BY strftime('%Y-%m', entry_date)
         ORDER BY month DESC
     ''')
-    
+
     # ============================================================
     # 5. INSERT SAMPLE DATA (if empty)
     # ============================================================
-    
+
     cursor.execute("SELECT COUNT(*) as count FROM trades")
     result = cursor.fetchone()
     if result[0] == 0:
-        print("Inserting sample trade data...")
         sample_trades = [
-            ('AAPL', 150.25, None, 10, 'BUY', datetime.now() - timedelta(days=5), None, 'OPEN', 0, 0, 'Momentum', None, 'SAMPLE'),
-            ('MSFT', 420.50, None, 5, 'BUY', datetime.now() - timedelta(days=4), None, 'OPEN', 0, 0, 'Value', None, 'SAMPLE'),
-            ('GOOGL', 135.00, None, 8, 'BUY', datetime.now() - timedelta(days=3), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
-            ('NVDA', 850.00, 870.00, 4, 'BUY', datetime.now() - timedelta(days=3), datetime.now() - timedelta(days=1), 'CLOSED', 80.00, 2.35, 'Momentum', None, 'SAMPLE'),
-            ('TSLA', 250.00, 260.00, 6, 'BUY', datetime.now() - timedelta(days=2), datetime.now(), 'CLOSED', 60.00, 4.00, 'Breakout', None, 'SAMPLE'),
-            ('TSLA', 250.00, 260.00, 6, 'BUY', datetime.now() - timedelta(days=2), datetime.now(), 'CLOSED', 60.00, 4.00, 'Breakout', None, 'SAMPLE'),
-            ('AMZN', 178.50, None, 12, 'BUY', datetime.now() - timedelta(days=7), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
-            ('META', 485.00, 492.00, 3, 'BUY', datetime.now() - timedelta(days=6), datetime.now() - timedelta(days=2), 'CLOSED', 21.00, 1.44, 'Value', None, 'SAMPLE'),
-            ('NFLX', 625.75, None, 7, 'BUY', datetime.now() - timedelta(days=5), None, 'OPEN', 0, 0, 'Momentum', None, 'SAMPLE'),
-            ('AMD', 145.30, 148.20, 15, 'BUY', datetime.now() - timedelta(days=4), datetime.now() - timedelta(days=1), 'CLOSED', 43.50, 2.00, 'Breakout', None, 'SAMPLE'),
-            ('INTC', 42.80, None, 20, 'BUY', datetime.now() - timedelta(days=10), None, 'OPEN', 0, 0, 'Value', None, 'SAMPLE'),
-            ('PYPL', 68.50, 70.25, 8, 'SELL', datetime.now() - timedelta(days=8), datetime.now() - timedelta(days=3), 'CLOSED', -14.00, -2.55, 'Momentum', None, 'SAMPLE'),
-            ('CRM', 298.00, None, 6, 'BUY', datetime.now() - timedelta(days=6), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
-            ('ADBE', 555.00, 560.50, 4, 'BUY', datetime.now() - timedelta(days=5), datetime.now() - timedelta(days=2), 'CLOSED', 22.00, 0.99, 'Value', None, 'SAMPLE'),
-            ('NOW', 768.00, None, 2, 'BUY', datetime.now() - timedelta(days=4), None, 'OPEN', 0, 0, 'Momentum', None, 'SAMPLE'),
-            ('UBER', 72.30, 74.00, 14, 'BUY', datetime.now() - timedelta(days=3), datetime.now() - timedelta(days=1), 'CLOSED', 23.80, 2.35, 'Breakout', None, 'SAMPLE'),
-            ('SHOP', 72.00, None, 11, 'BUY', datetime.now() - timedelta(days=9), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
-            ('COIN', 235.00, 245.00, 5, 'BUY', datetime.now() - timedelta(days=7), datetime.now() - timedelta(days=3), 'CLOSED', 50.00, 2.13, 'Momentum', None, 'SAMPLE'),
-            ('SNOW', 168.50, None, 9, 'BUY', datetime.now() - timedelta(days=6), None, 'OPEN', 0, 0, 'Value', None, 'SAMPLE'),
-            ('BA', 185.00, 182.50, 7, 'SELL', datetime.now() - timedelta(days=5), datetime.now() - timedelta(days=2), 'CLOSED', -17.50, -1.35, 'Breakout', None, 'SAMPLE'),
-            ('DIS', 110.25, None, 13, 'BUY', datetime.now() - timedelta(days=8), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
+            ('AAPL', 150.25, None, 10, 'BUY', (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Momentum', None, 'SAMPLE'),
+            ('MSFT', 420.50, None, 5, 'BUY', (datetime.now() - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Value', None, 'SAMPLE'),
+            ('GOOGL', 135.00, None, 8, 'BUY', (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
+            ('NVDA', 850.00, 870.00, 4, 'BUY', (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', 80.00, 2.35, 'Momentum', None, 'SAMPLE'),
+            ('TSLA', 250.00, 260.00, 6, 'BUY', (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S'), datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', 60.00, 4.00, 'Breakout', None, 'SAMPLE'),
+            ('AMZN', 178.50, None, 12, 'BUY', (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
+            ('META', 485.00, 492.00, 3, 'BUY', (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', 21.00, 1.44, 'Value', None, 'SAMPLE'),
+            ('NFLX', 625.75, None, 7, 'BUY', (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Momentum', None, 'SAMPLE'),
+            ('AMD', 145.30, 148.20, 15, 'BUY', (datetime.now() - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', 43.50, 2.00, 'Breakout', None, 'SAMPLE'),
+            ('INTC', 42.80, None, 20, 'BUY', (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Value', None, 'SAMPLE'),
+            ('PYPL', 68.50, 70.25, 8, 'SELL', (datetime.now() - timedelta(days=8)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', -14.00, -2.55, 'Momentum', None, 'SAMPLE'),
+            ('CRM', 298.00, None, 6, 'BUY', (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
+            ('ADBE', 555.00, 560.50, 4, 'BUY', (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', 22.00, 0.99, 'Value', None, 'SAMPLE'),
+            ('NOW', 768.00, None, 2, 'BUY', (datetime.now() - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Momentum', None, 'SAMPLE'),
+            ('UBER', 72.30, 74.00, 14, 'BUY', (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', 23.80, 2.35, 'Breakout', None, 'SAMPLE'),
+            ('SHOP', 72.00, None, 11, 'BUY', (datetime.now() - timedelta(days=9)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
+            ('COIN', 235.00, 245.00, 5, 'BUY', (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', 50.00, 2.13, 'Momentum', None, 'SAMPLE'),
+            ('SNOW', 168.50, None, 9, 'BUY', (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Value', None, 'SAMPLE'),
+            ('BA', 185.00, 182.50, 7, 'SELL', (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d %H:%M:%S'), (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S'), 'CLOSED', -17.50, -1.35, 'Breakout', None, 'SAMPLE'),
+            ('DIS', 110.25, None, 13, 'BUY', (datetime.now() - timedelta(days=8)).strftime('%Y-%m-%d %H:%M:%S'), None, 'OPEN', 0, 0, 'Growth', None, 'SAMPLE'),
         ]
-        
+
         for trade in sample_trades:
             cursor.execute('''
                 INSERT INTO trades (symbol, entry_price, exit_price, quantity, trade_type, 
@@ -338,7 +359,7 @@ def init_db():
                                   strategy, notes, source)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', trade)
-        
+
         # Insert initial analytics
         cursor.execute('''
             INSERT INTO trade_analytics (total_trades, winning_trades, losing_trades, win_rate, 
@@ -357,51 +378,38 @@ def init_db():
                 datetime('now')
             FROM trades WHERE status = 'CLOSED'
         ''')
-    
+
     conn.commit()
     conn.close()
-    print("✅ Database initialized successfully!")
-    print(f"📁 Database location: {DB_PATH}")
 
 
-# Initialize database
-init_db()
+# Initialize database upon startup
+ensure_db()
 
 
-# ========== SERVE YOUR HTML FILE ==========
+# ========== SERVE APPLICATION ==========
 @app.route('/')
 def index():
-    """Serve your HTML file from templates folder"""
-    try:
-        # Try to render from templates folder
-        return render_template('/Users/shrikar/Desktop/my_flask_app copy/venv/trade_analysis_app/templates/index.html')
-    except:
-        # Fallback: check if index.html exists in root
-        if os.path.exists('/Users/shrikar/Desktop/my_flask_app copy/venv/trade_analysis_app/templates/index.html'):
-            return send_file('/Users/shrikar/Desktop/my_flask_app copy/venv/trade_analysis_app/templates/index.html')
-        return jsonify({
-            "error": "index.html not found",
-            "message": "Please ensure index.html is in the 'templates' folder",
-            "template_folder": app.template_folder,
-            "current_directory": os.getcwd(),
-            "files_in_templates": os.listdir('templates') if os.path.exists('templates') else []
-        }), 404
+    """Serve Dashboard HTML"""
+    return render_template('index.html')
 
 
 @app.route('/static/<path:path>')
 def serve_static(path):
-    """Serve static files from templates/static folder"""
-    return send_from_directory('templates/static', path)
+    """Serve static files"""
+    if os.path.exists(os.path.join(STATIC_DIR, path)):
+        return send_from_directory(STATIC_DIR, path)
+    return send_from_directory(os.path.join(TEMPLATE_DIR, 'static'), path)
 
 
-# ========== API ENDPOINTS FOR YOUR HTML ==========
+# ========== API ENDPOINTS ==========
 
 @app.route('/api/holdings', methods=['GET'])
 def get_holdings():
     """Get current holdings for dashboard (open positions)"""
     conn = get_db()
     cursor = conn.cursor()
-    
+
     cursor.execute('''
         SELECT 
             symbol,
@@ -416,14 +424,12 @@ def get_holdings():
         GROUP BY symbol
         ORDER BY symbol
     ''')
-    
+
     holdings = [dict(row) for row in cursor.fetchall()]
-    
     total_invested = sum(h.get('invested', 0) for h in holdings)
     total_value = sum(h.get('current_value', 0) for h in holdings)
-    
     conn.close()
-    
+
     return jsonify({
         "holdings": holdings,
         "total_invested": round(total_invested, 2),
@@ -437,7 +443,7 @@ def get_summary():
     """Get portfolio summary"""
     conn = get_db()
     cursor = conn.cursor()
-    
+
     cursor.execute('''
         SELECT 
             COALESCE(SUM(CASE WHEN status = 'OPEN' THEN quantity * entry_price ELSE 0 END), 0) as total_invested,
@@ -445,7 +451,7 @@ def get_summary():
         FROM trades
     ''')
     result = cursor.fetchone()
-    
+
     cursor.execute('''
         SELECT 
             COUNT(*) as total,
@@ -453,13 +459,12 @@ def get_summary():
         FROM trades WHERE status = 'CLOSED'
     ''')
     win_data = cursor.fetchone()
-    
     conn.close()
-    
+
     win_rate = 0
-    if win_data['total'] and win_data['total'] > 0:
+    if win_data and win_data['total'] and win_data['total'] > 0:
         win_rate = round((win_data['wins'] / win_data['total']) * 100, 2)
-    
+
     return jsonify({
         "total_invested": round(result['total_invested'], 2) if result else 0,
         "current_value": round(result['current_value'], 2) if result else 0,
@@ -499,19 +504,19 @@ def get_recent_trades():
 @app.route('/api/execute-sql', methods=['POST'])
 def execute_sql():
     """Execute SQL query"""
-    data = request.json
-    query = data.get('query', '')
-    
+    data = request.json or {}
+    query = data.get('query', '').strip()
+
     if not query:
         return jsonify({"error": "No query provided"}), 400
-    
+
     conn = get_db()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute(query)
-        
-        if query.strip().upper().startswith("SELECT"):
+
+        if query.upper().startswith("SELECT") or query.upper().startswith("PRAGMA"):
             rows = cursor.fetchall()
             result = [dict(row) for row in rows]
             conn.commit()
@@ -539,26 +544,25 @@ def execute_sql():
 
 @app.route('/api/database/info', methods=['GET'])
 def database_info():
-    """Get database information"""
+    """Get database schema and statistics"""
     conn = get_db()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     tables = [row['name'] for row in cursor.fetchall()]
-    
+
     cursor.execute("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name")
     views = [row['name'] for row in cursor.fetchall()]
-    
+
     cursor.execute("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name")
     triggers = [row['name'] for row in cursor.fetchall()]
-    
+
     cursor.execute("SELECT COUNT(*) FROM trades")
     count = cursor.fetchone()[0]
-    
+
     size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
-    
     conn.close()
-    
+
     return jsonify({
         "tables": tables,
         "views": views,
@@ -571,13 +575,13 @@ def database_info():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint for frontend"""
-    return jsonify({"status": "healthy", "server": "running", "port": 5000})
+    """Health check endpoint"""
+    return jsonify({"status": "healthy", "server": "running"})
 
 
 @app.route('/api/trades', methods=['GET'])
 def get_trades():
-    """Get all trades (full data)"""
+    """Get all trades"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM trades ORDER BY entry_date DESC')
@@ -605,7 +609,7 @@ def get_closed_trades():
     cursor.execute('SELECT * FROM v_closed_trades LIMIT 50')
     trades = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    return jsonify({"closed_trades": tricks})
+    return jsonify({"closed_trades": trades})
 
 
 @app.route('/api/symbol-performance', methods=['GET'])
@@ -641,32 +645,15 @@ def get_monthly_performance():
     return jsonify({"monthly_performance": monthly})
 
 
+@app.route('/api/export-db', methods=['GET'])
+def export_database():
+    """Export SQLite database file for download"""
+    ensure_db()
+    if os.path.exists(DB_PATH):
+        return send_file(DB_PATH, as_attachment=True, download_name='trades.db')
+    return jsonify({"error": "Database file not found"}), 404
+
+
 if __name__ == '__main__':
-    print("\n" + "=" * 70)
-    print("📈 COMPLETE TRADING API - ALL TABLES, VIEWS & TRIGGERS")
-    print("=" * 70)
-    print(f"📁 Database: {DB_PATH}")
-    print(f"📁 Templates folder: {app.template_folder}")
-    print(f"📄 HTML File location: templates/index.html")
-    print(f"🌐 Server: http://localhost:5000")
-    print("\n📊 TABLES:")
-    print("   - trades (main fact table)")
-    print("   - trade_events (audit log)")
-    print("   - trade_analytics (aggregated stats)")
-    print("   - daily_aggregates")
-    print("   - strategy_performance")
-    print("   - monitor_logs")
-    print("   - import_history")
-    print("\n👁️ VIEWS:")
-    print("   - v_active_trades")
-    print("   - v_closed_trades")
-    print("   - v_symbol_performance")
-    print("   - v_daily_performance")
-    print("   - v_monthly_performance")
-    print("\n⚡ TRIGGERS:")
-    print("   - trg_calculate_pnl")
-    print("   - trg_log_trade_insert")
-    print("   - trg_update_timestamp")
-    print("=" * 70)
-    print("\n✅ Server is running! Press Ctrl+C to stop\n")
+    print(f"Server starting on http://localhost:5000 (Database: {DB_PATH})")
     app.run(debug=True, host='0.0.0.0', port=5000)
