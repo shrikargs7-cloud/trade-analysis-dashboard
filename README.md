@@ -1,82 +1,112 @@
 # 📈 Trade Analysis Dashboard
 
-A modern trading analytics dashboard built with Flask and SQLite. Features portfolio tracking, SQL query terminal, live performance analytics, and Excel/CSV trade importing.
+<div align="center">
+
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Flask](https://img.shields.io/badge/Flask-2.x-000000?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
+[![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
+[![Vercel Ready](https://img.shields.io/badge/Deployment-Vercel_Serverless-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](https://opensource.org/licenses/MIT)
+
+**Full-Stack Trading Performance Analytics Platform with SQL Terminal & Portfolio PnL Tracking**
+
+</div>
 
 ---
 
-## 🚀 Features
+## 📖 Overview
 
-- **Portfolio Holdings**: Real-time position tracking and profit/loss calculation.
-- **Advanced Analytics**: Win rate, Sharpe ratio, Max Drawdown, and monthly performance heatmap.
-- **SQL Terminal**: Interactive SQL query console with schema viewer, predefined views, and history.
-- **Database Export**: One-click SQLite database backup and download (`trades.db`).
-- **Excel/CSV Import**: Batch trade importing directly into the database.
-- **Serverless Ready**: Configured for seamless deployment on **Vercel** with ephemeral SQLite handling.
+The **Trade Analysis Dashboard** is a high-performance web platform built with Flask and SQLite to track stock positions, compute real-time profit and loss (PnL), visualize historical return distributions, and execute raw analytical queries via an integrated SQL sandbox.
 
 ---
 
-## 🛠️ Project Structure
+## 🏗️ System Architecture & Data Flow
 
+```mermaid
+flowchart TD
+    User([Trader / Analyst]) --> WebUI[Web Interface / Dashboard UI]
+    
+    subgraph Frontend Layer
+        WebUI --> MetricsView[Portfolio Metrics & Win-Rate Cards]
+        WebUI --> ChartView[Interactive Chart.js PnL Graphs]
+        WebUI --> SQLTerminal[In-Browser SQL Query Console]
+        WebUI --> ImportModal[CSV / Excel Trade Importer]
+    end
+
+    subgraph Backend Routing (Flask)
+        MetricsView & ChartView --> AppRoutes[Flask Application Core - app.py]
+        SQLTerminal --> QueryEngine[Safe SQL Query Execution Engine]
+        ImportModal --> FileParser[Pandas / CSV Ingestion Pipeline]
+    end
+
+    subgraph Database Layer
+        AppRoutes & QueryEngine & FileParser --> SQLiteDB[(SQLite Database - schema.sql)]
+        SQLiteDB --> UsersTable[users]
+        SQLiteDB --> TradesTable[trades]
+    end
 ```
-├── app.py              # Main Flask application & REST API
-├── api/
-│   └── index.py        # Vercel Serverless Function entry point
-├── database.py         # Database utilities & trigger/view management
-├── schema.sql          # Full SQLite database schema & seed data
-├── sqlite.py           # Standalone DB initialization script
-├── templates/
-│   └── index.html      # Responsive Single Page Application (SPA)
-├── requirements.txt    # Python dependencies
-├── vercel.json         # Vercel routing configuration
-└── .gitignore          # Ignored files (databases, caches, OS files)
+
+---
+
+## 🗄️ Database Schema
+
+```mermaid
+erDiagram
+    USERS ||--o{ TRADES : owns
+    USERS {
+        int id PK
+        string username
+        string email
+        timestamp created_at
+    }
+    TRADES {
+        int id PK
+        int user_id FK
+        string symbol
+        string trade_type "BUY / SELL"
+        float quantity
+        float entry_price
+        float exit_price
+        float pnl
+        timestamp trade_date
+    }
 ```
 
 ---
 
-## 💻 Local Setup & Running
+## ✨ Core Capabilities
 
-### 1. Install dependencies
+- **Real-Time Portfolio PnL**: Automatically computes unrealized and realized gain/loss across open and closed positions.
+- **Interactive SQL Sandbox**: Execute custom SELECT queries directly against your trading database to extract tailored insights.
+- **Bulk CSV / Excel Ingestion**: Import execution logs from brokers with schema mapping.
+- **Serverless Ready**: Configured with `vercel.json` and WSGI wrapper for immediate cloud deployment.
 
+---
+
+## 🚀 Quickstart
+
+### 1. Clone & Setup Virtual Environment
 ```bash
+git clone https://github.com/shrikargs7-cloud/trade-analysis-dashboard.git
+cd trade-analysis-dashboard
+
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Run the application
-
+### 2. Initialize Database
 ```bash
-python app.py
+python3 -c "import sqlite3; conn = sqlite3.connect('trades.db'); conn.executescript(open('schema.sql').read()); conn.close()"
 ```
 
+### 3. Launch App
+```bash
+python3 app.py
+```
 Open [http://localhost:5000](http://localhost:5000) in your browser.
 
 ---
 
-## ☁️ Deployment on Vercel
-
-This repository is pre-configured for Vercel:
-
-1. Import your GitHub repository in the [Vercel Dashboard](https://vercel.com).
-2. Framework Preset: **Other** (detected automatically via `vercel.json` and `api/index.py`).
-3. Deploy!
-
-> **Note on SQLite on Serverless:** Vercel functions execute in an ephemeral environment. The database is initialized automatically with sample data in `/tmp/trades.db` upon cold starts.
-
----
-
-## 📡 API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | `GET` | Dashboard interface |
-| `/api/holdings` | `GET` | Active trade holdings & portfolio summary |
-| `/api/summary` | `GET` | Portfolio invested & win rate stats |
-| `/api/trades` | `GET` | Complete trade history |
-| `/api/active-trades` | `GET` | Open positions (`v_active_trades`) |
-| `/api/closed-trades` | `GET` | Closed positions (`v_closed_trades`) |
-| `/api/symbol-performance` | `GET` | Performance aggregated by symbol |
-| `/api/daily-performance` | `GET` | Daily P&L and win rate |
-| `/api/monthly-performance` | `GET` | Monthly performance summary |
-| `/api/database/info` | `GET` | Schema inspection (tables, views, triggers) |
-| `/api/execute-sql` | `POST` | Execute custom SQL query |
-| `/api/export-db` | `GET` | Download current SQLite database file |
-| `/api/health` | `GET` | Server health check |
+## 📄 License
+MIT License © [Shrikar G S](https://github.com/shrikargs7-cloud)
